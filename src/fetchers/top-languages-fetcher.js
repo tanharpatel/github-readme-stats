@@ -1,4 +1,4 @@
-const { request, logger, clampValue } = require("../common/utils");
+const { request, logger } = require("../common/utils");
 const retryer = require("../common/retryer");
 require("dotenv").config();
 
@@ -11,6 +11,7 @@ const fetcher = (variables, token) => {
           # fetch only owner repos & not forks
           repositories(ownerAffiliations: OWNER, isFork: false, first: 100) {
             nodes {
+              name
               languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
                 edges {
                   size
@@ -29,14 +30,12 @@ const fetcher = (variables, token) => {
     },
     {
       Authorization: `bearer ${token}`,
-    }
+    },
   );
 };
 
-async function fetchTopLanguages(username, langsCount = 5) {
+async function fetchTopLanguages(username, exclude_repo = []) {
   if (!username) throw Error("Invalid username");
-
-  langsCount = clampValue(parseInt(langsCount), 1, 10);
 
   const res = await retryer(fetcher, { login: username });
 
@@ -46,6 +45,22 @@ async function fetchTopLanguages(username, langsCount = 5) {
   }
 
   let repoNodes = res.data.data.user.repositories.nodes;
+  let repoToHide = {};
+
+  // populate repoToHide map for quick lookup
+  // while filtering out
+  if (exclude_repo) {
+    exclude_repo.forEach((repoName) => {
+      repoToHide[repoName] = true;
+    });
+  }
+
+  // filter out repositories to be hidden
+  repoNodes = repoNodes
+    .sort((a, b) => b.size - a.size)
+    .filter((name) => {
+      return !repoToHide[name.name];
+    });
 
   repoNodes = repoNodes
     .filter((node) => {
@@ -53,7 +68,6 @@ async function fetchTopLanguages(username, langsCount = 5) {
     })
     // flatten the list of language nodes
     .reduce((acc, curr) => curr.languages.edges.concat(acc), [])
-    .sort((a, b) => b.size - a.size)
     .reduce((acc, prev) => {
       // get the size of the language (bytes)
       let langSize = prev.size;
@@ -75,7 +89,7 @@ async function fetchTopLanguages(username, langsCount = 5) {
     }, {});
 
   const topLangs = Object.keys(repoNodes)
-    .slice(0, langsCount)
+    .sort((a, b) => repoNodes[b].size - repoNodes[a].size)
     .reduce((result, key) => {
       result[key] = repoNodes[key];
       return result;
